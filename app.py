@@ -22,7 +22,7 @@ st.title("MCQ Question Paper Generator")
 
 # ---------- FONT HANDLING ----------
 # Point to your DejaVu extracted folder
-FONTS_DIR = r"C:\Users\10568\OneDrive - PHN TECHNOLOGY PRIVATE LIMITED\Desktop\webdevpro\pdfConvertor\dejavu-fonts-ttf-2.37\ttf"
+FONTS_DIR = r"fonts\dejavu-fonts-ttf-2.37\ttf"
 
 registered_font = None
 if os.path.isdir(FONTS_DIR):
