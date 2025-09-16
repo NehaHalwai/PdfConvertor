@@ -1,10 +1,9 @@
-# app.py
 import streamlit as st
 import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    KeepTogether
+    KeepTogether, Flowable
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
@@ -13,6 +12,7 @@ from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 
 import tempfile, os, zipfile, re
 from xml.sax.saxutils import escape
@@ -20,30 +20,39 @@ from xml.sax.saxutils import escape
 st.set_page_config(layout="wide")
 st.title("MCQ Question Paper Generator")
 
+# A custom flowable for a full-width line
+class FullWidthLine(Flowable):
+    def __init__(self, width=A4[0] - 2 * cm, thickness=1, color=colors.black):
+        Flowable.__init__(self)
+        self.width = width
+        self.thickness = thickness
+        self.color = color
+
+    def wrap(self, *args):
+        return (self.width, self.thickness)
+
+    def draw(self):
+        self.canv.setStrokeColor(self.color)
+        self.canv.setLineWidth(self.thickness)
+        self.canv.line(0, 0, self.width, 0)
+
 # ---------- FONT HANDLING ----------
-# Point to your DejaVu extracted folder
-FONTS_DIR = r"fonts\dejavu-fonts-ttf-2.37\ttf"
+# Use a relative path that works on Streamlit cloud
+FONTS_DIR = os.path.join(os.path.dirname(__file__), "fonts", "dejavu-fonts-ttf-2.37", "ttf")
 
 registered_font = None
 if os.path.isdir(FONTS_DIR):
     try:
-        # Register all .ttf files in the folder
-        for fname in os.listdir(FONTS_DIR):
-            if fname.lower().endswith(".ttf"):
-                font_path = os.path.join(FONTS_DIR, fname)
-                font_name = os.path.splitext(fname)[0]
-                pdfmetrics.registerFont(TTFont(font_name, font_path))
-        # Pick base font
-        if "DejaVuSans" in pdfmetrics.getRegisteredFontNames():
-            registered_font = "DejaVuSans"
-        elif "DejaVuSans.ttf" in pdfmetrics.getRegisteredFontNames():
-            registered_font = "DejaVuSans.ttf"
+        pdfmetrics.registerFont(TTFont('DejaVuSans', os.path.join(FONTS_DIR, 'DejaVuSans.ttf')))
+        pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', os.path.join(FONTS_DIR, 'DejaVuSans-Bold.ttf')))
+        registerFontFamily('DejaVuSans', normal='DejaVuSans', bold='DejaVuSans-Bold')
+        registered_font = "DejaVuSans"
     except Exception as e:
         st.error(f"Font registration failed: {e}")
 
 if not registered_font:
     st.error("⚠️ DejaVu fonts not found. Superscripts/subscripts may still fail. "
-             "Please check your `ttf` folder path.")
+             "Please check your `ttf` folder path is correct and exists.")
 
 # ---------- Text cleaning / conversion helpers ----------
 SUPER_MAP = {"²":"2","³":"3","¹":"1","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9","⁰":"0","⁻":"-"}
@@ -86,7 +95,7 @@ def clean_text(raw_text: str) -> str:
     return s
 
 # ---------- Draw header/footer ----------
-def draw_header_footer(canvas, doc, set_name, is_first_page=False):
+def draw_header_footer(canvas, doc, set_name, exam_details):
     page_width, page_height = A4
     margin = 1.5 * cm
     fontnames = pdfmetrics.getRegisteredFontNames()
@@ -101,16 +110,17 @@ def draw_header_footer(canvas, doc, set_name, is_first_page=False):
     line3_y = line2_y - 0.6 * cm
     line4_y = line3_y - 0.5 * cm
 
-    canvas.drawCentredString(page_width / 2, line1_y, "PHN Scholar Exam 2025-26")
+    canvas.drawCentredString(page_width / 2, line1_y, exam_details["school_name"])
     canvas.setFont(heading_font, 12)
-    canvas.drawCentredString(page_width / 2, line2_y, "Question Paper - Class 9")
+    canvas.drawCentredString(page_width / 2, line2_y, f"{exam_details['exam_name']} - {exam_details['class_name']}")
     canvas.setFont(normal_font, 11)
-    canvas.drawCentredString(page_width / 2, line3_y, "Maharashtra State Board")
+    canvas.drawCentredString(page_width / 2, line3_y, exam_details["board_name"])
     canvas.drawCentredString(page_width / 2, line4_y, f"SET: {set_name}")
 
     try:
-        logo_left = ImageReader("scholar.png")
-        logo_right = ImageReader("logo.png")
+        # Adjusted for relative paths in deployment
+        logo_left = ImageReader(os.path.join(os.path.dirname(__file__), "scholar.png"))
+        logo_right = ImageReader(os.path.join(os.path.dirname(__file__), "logo.png"))
         logo_size = 2.5 * cm
         header_center_y = (line1_y + line4_y) / 2
         y_position = header_center_y - (logo_size / 2)
@@ -132,32 +142,43 @@ def create_header_section(total_marks, time_duration, sections, no_of_questions,
     story = []
     styles = getSampleStyleSheet()
     base_font = "DejaVuSans" if "DejaVuSans" in pdfmetrics.getRegisteredFontNames() else styles['Normal'].fontName
-
-    marks_data = [['Total Marks:', total_marks, '', 'Time Duration:', time_duration]]
-    marks_table = Table(marks_data, colWidths=[2.5*cm, 2*cm, 8*cm, 3*cm, 2*cm])
+    
+    # Define custom styles
+    bold_style = ParagraphStyle(name='BoldStyle', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11)
+    normal_style = ParagraphStyle(name='NormalStyle', parent=styles['Normal'], fontName=base_font, fontSize=11)
+    
+    # Create a table for total marks and time duration
+    # ADJUSTED COLUMNS FOR TIGHTER LAYOUT
+    # Total Marks and Duration in single row
+    marks_data = [[
+       Paragraph(f"<b>Total Marks: {total_marks}</b>", bold_style),
+       Paragraph(f"<b>Total Duration: {time_duration}</b>", bold_style)
+    ]]
+    marks_table = Table(marks_data, colWidths=[9*cm, 9*cm])
     marks_table.setStyle(TableStyle([
-        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-        ('FONTNAME', (0,0), (-1,-1), base_font),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+       ('ALIGN', (0,0), (0,0), 'LEFT'),     
+       ('ALIGN', (1,0), (1,0), 'RIGHT'),    
+       ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+       ('BOTTOMPADDING', (0,0), (-1,-1), 6),
     ]))
     story.append(marks_table)
-    story.append(Spacer(1, 0.5*cm))
+    story.append(Spacer(1, 0.2*cm)) 
 
-    story.append(Paragraph("<b><font size=11>PATTERN & MARKING SCHEME</font></b>", styles['Normal']))
+    # Centered "PATTERN & MARKING SCHEME" title
+    centered_title_style = ParagraphStyle(name='CenteredTitle', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11, alignment=TA_CENTER)
+    story.append(Paragraph("<b>PATTERN & MARKING SCHEME</b>", centered_title_style))
     story.append(Spacer(1, 0.3*cm))
 
     pattern_data = [
-        ['Section', *[f"({i+1}) {s.strip()}" for i, s in enumerate(sections)]],
-        ['No. Of Questions', *no_of_questions],
-        ['Marks Per Ques.', *marks_per_question]
+        [Paragraph('Section', bold_style), *[Paragraph(f"({i+1}) {s.strip()}", bold_style) for i, s in enumerate(sections)]],
+        [Paragraph('No. Of Questions', normal_style), *[Paragraph(str(q), normal_style) for q in no_of_questions]],
+        [Paragraph('Marks Per Ques.', normal_style), *[Paragraph(str(m), normal_style) for m in marks_per_question]]
     ]
     col_widths = [4.5*cm] + [5*cm] * len(sections)
     pattern_table = Table(pattern_data, colWidths=col_widths)
     pattern_table.setStyle(TableStyle([
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('FONTNAME', (0,0), (-1,0), base_font),
-        ('FONTNAME', (0,1), (0,-1), base_font),
         ('GRID', (0,0), (-1,-1), 1, colors.black),
         ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
         ('TOPPADDING', (0,0), (-1,-1), 5),
@@ -166,7 +187,7 @@ def create_header_section(total_marks, time_duration, sections, no_of_questions,
     story.append(pattern_table)
     story.append(Spacer(1, 0.5*cm))
 
-    story.append(Paragraph("<b><font size=11>INSTRUCTIONS</font></b>", styles['Normal']))
+    story.append(Paragraph("<b>INSTRUCTIONS</b>", centered_title_style))
     story.append(Spacer(1, 0.3*cm))
     instruction_style = ParagraphStyle(name='InstructionStyle', alignment=TA_LEFT, fontSize=10, fontName=base_font, leftIndent=10)
     for instruction in instructions:
@@ -175,19 +196,20 @@ def create_header_section(total_marks, time_duration, sections, no_of_questions,
             story.append(Spacer(1, 0.1*cm))
 
     story.append(Spacer(1, 0.5*cm))
-    story.append(Paragraph("____________________________________________________________________________________", styles['Normal']))
+    story.append(FullWidthLine())
     story.append(Spacer(1, 0.5*cm))
     return story
 
 # ---------- PDF Generator ----------
-def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration, no_of_questions, marks_per_question, instructions):
+def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration, no_of_questions, marks_per_question, instructions, exam_details):
     story = []
     styles = getSampleStyleSheet()
     base_font = "DejaVuSans" if "DejaVuSans" in pdfmetrics.getRegisteredFontNames() else styles['Normal'].fontName
-
-    styles.add(ParagraphStyle(name='QuestionText', alignment=TA_LEFT, fontSize=11, fontName=base_font))
-    styles.add(ParagraphStyle(name='OptionText', alignment=TA_LEFT, fontSize=10, fontName=base_font))
-    styles.add(ParagraphStyle(name='SectionHeading', alignment=TA_CENTER, fontSize=12, fontName=base_font, textColor=colors.white, backColor=colors.HexColor("#001F4D"), borderPadding=5))
+    
+    # Styles for paragraphs within the story
+    styles.add(ParagraphStyle(name='QuestionText', alignment=TA_LEFT, fontSize=11, fontName=base_font, leading=14))
+    styles.add(ParagraphStyle(name='OptionText', alignment=TA_LEFT, fontSize=10, fontName=base_font, leading=12))
+    styles.add(ParagraphStyle(name='SectionHeading', alignment=TA_CENTER, fontSize=12, fontName=f"{base_font}-Bold", textColor=colors.white, backColor=colors.HexColor("#001F4D"), borderPadding=5))
 
     first_page_story = create_header_section(total_marks, time_duration, sections, no_of_questions, marks_per_question, instructions)
     story.extend(first_page_story)
@@ -196,7 +218,7 @@ def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration,
     col_idx = 1
     current_section_idx = 0
     questions_in_section = 0
-    total_questions = 50
+    total_questions = sum(no_of_questions)
 
     if sections:
         story.append(Spacer(1, 0.5*cm))
@@ -217,10 +239,17 @@ def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration,
 
         q_col = df_set.columns[col_idx]
         opts_cols = df_set.columns[col_idx + 1: col_idx + 5]
+        
+        # Check if the question and all options are valid
+        if pd.isna(df_set.iloc[0][q_col]) or any(pd.isna(df_set.iloc[0][oc]) for oc in opts_cols):
+            col_idx += 5
+            continue
+            
         question_text = clean_text(df_set.iloc[0][q_col])
         options = [clean_text(df_set.iloc[0][oc]) for oc in opts_cols]
 
         question_block = []
+        # Bold the question number and the question text
         question_block.append(Paragraph(f"<b>{question_number}) {question_text}</b>", styles['QuestionText']))
 
         if max(len(re.sub(r'<.*?>','',opt)) for opt in options) < 25:
@@ -258,7 +287,7 @@ def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration,
                             rightMargin=cm, leftMargin=cm, topMargin=4.5*cm, bottomMargin=cm)
 
     def on_page(canvas, doc):
-        draw_header_footer(canvas, doc, set_name)
+        draw_header_footer(canvas, doc, set_name, exam_details)
 
     doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
     return pdf_file
@@ -288,8 +317,8 @@ if excel_file:
         no_of_questions = st.text_area("No. of Questions (comma separated)", "20,20,10").split(",")
         marks_per_question = st.text_area("Marks Per Question (comma separated)", "1,1,1").split(",")
         try:
-            no_of_questions = list(map(int, no_of_questions))
-            marks_per_question = list(map(int, marks_per_question))
+            no_of_questions = list(map(int, [q.strip() for q in no_of_questions]))
+            marks_per_question = list(map(int, [m.strip() for m in marks_per_question]))
         except ValueError:
             st.error("Please enter numbers for 'No. of Questions' and 'Marks Per Question'.")
 
@@ -306,6 +335,13 @@ if excel_file:
             "Kindly do not write on the question paper. Return it to the examiner after the exam.\n",
         ).split("\n")
 
+    exam_details = {
+        "school_name": school_name,
+        "board_name": board_name,
+        "exam_name": exam_name,
+        "class_name": class_name,
+    }
+
     temp_excel = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
     temp_excel.write(excel_file.read())
     temp_excel.close()
@@ -321,25 +357,40 @@ if excel_file:
 
         with col1:
             if st.button("Download Selected Set"):
-                df_set = df_raw[df_raw["Set"] == selected_set].reset_index(drop=True)
-                pdf_path = generate_pdf_for_set(
-                    df_set, selected_set, sections, total_marks, time_duration,
-                    no_of_questions, marks_per_question, instructions
-                )
-                with open(pdf_path, "rb") as f:
-                    st.download_button("Download PDF", f, file_name=f"MCQ_Set_{selected_set}.pdf")
+                if sum(no_of_questions) > 0:
+                    df_set = df_raw[df_raw["Set"] == selected_set].reset_index(drop=True)
+                    if len(df_set.columns) < sum(no_of_questions) * 5 + 1:
+                        st.error("The number of questions specified in sections is more than the number of questions found in the Excel file for this set.")
+                    else:
+                        pdf_path = generate_pdf_for_set(
+                            df_set, selected_set, sections, total_marks, time_duration,
+                            no_of_questions, marks_per_question, instructions, exam_details
+                        )
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("Download PDF", f, file_name=f"MCQ_Set_{selected_set}.pdf")
+                        st.success("PDF generated successfully!")
+                else:
+                    st.warning("Please specify at least one question in the 'No. of Questions' field.")
+
 
         with col2:
             if st.button("Download All Sets as ZIP"):
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    zip_file_path = os.path.join(temp_dir, "All_MCQ_Sets.zip")
-                    with zipfile.ZipFile(zip_file_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                        for current_set in unique_sets:
-                            df_set = df_raw[df_raw["Set"] == current_set].reset_index(drop=True)
-                            pdf_path = generate_pdf_for_set(
-                                df_set, current_set, sections, total_marks, time_duration,
-                                no_of_questions, marks_per_question, instructions
-                            )
-                            zipf.write(pdf_path, f"MCQ_Set_{current_set}.pdf")
-                    with open(zip_file_path, "rb") as f:
-                        st.download_button("Download ZIP", f, file_name="All_MCQ_Sets.zip")
+                if sum(no_of_questions) > 0:
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_file_path = os.path.join(temp_dir, "All_MCQ_Sets.zip")
+                        with zipfile.ZipFile(zip_file_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                            for current_set in unique_sets:
+                                df_set = df_raw[df_raw["Set"] == current_set].reset_index(drop=True)
+                                if len(df_set.columns) < sum(no_of_questions) * 5 + 1:
+                                    st.warning(f"Skipping set {current_set} as it does not contain the specified number of questions.")
+                                    continue
+                                pdf_path = generate_pdf_for_set(
+                                    df_set, current_set, sections, total_marks, time_duration,
+                                    no_of_questions, marks_per_question, instructions, exam_details
+                                )
+                                zipf.write(pdf_path, f"MCQ_Set_{current_set}.pdf")
+                        with open(zip_file_path, "rb") as f:
+                            st.download_button("Download ZIP", f, file_name="All_MCQ_Sets.zip")
+                        st.success("ZIP file generated successfully!")
+                else:
+                    st.warning("Please specify at least one question in the 'No. of Questions' field.")
