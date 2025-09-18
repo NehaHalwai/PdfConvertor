@@ -142,39 +142,45 @@ def create_header_section(total_marks, time_duration, sections, no_of_questions,
     story = []
     styles = getSampleStyleSheet()
     base_font = "DejaVuSans" if "DejaVuSans" in pdfmetrics.getRegisteredFontNames() else styles['Normal'].fontName
-    
-    # Define custom styles
-    bold_style = ParagraphStyle(name='BoldStyle', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11)
-    normal_style = ParagraphStyle(name='NormalStyle', parent=styles['Normal'], fontName=base_font, fontSize=11)
-    
-    # Create a table for total marks and time duration
-    # ADJUSTED COLUMNS FOR TIGHTER LAYOUT
-    # Total Marks and Duration in single row
+
+    bold_style_left = ParagraphStyle(
+        name='BoldLeft', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11, alignment=TA_LEFT
+    )
+    bold_style_center = ParagraphStyle(
+        name='BoldCenter', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11, alignment=TA_CENTER
+    )
+    bold_style_right = ParagraphStyle(
+    name='BoldRight', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11, alignment=2  # TA_RIGHT
+    )
+    normal_style = ParagraphStyle(
+        name='Normal', parent=styles['Normal'], fontName=base_font, fontSize=10, alignment=TA_LEFT
+    )
+
+    # Total Marks & Duration Row
     marks_data = [[
-       Paragraph(f"<b>Total Marks: {total_marks}</b>", bold_style),
-       Paragraph(f"<b>Total Duration: {time_duration}</b>", bold_style)
+        Paragraph(f"Total Marks: {total_marks}", bold_style_left),
+        Paragraph(f"Total Duration: {time_duration}", bold_style_right)
     ]]
-    marks_table = Table(marks_data, colWidths=[9*cm, 9*cm])
+    marks_table = Table(marks_data, colWidths=[(A4[0]-2*cm)/2]*2)
     marks_table.setStyle(TableStyle([
-       ('ALIGN', (0,0), (0,0), 'LEFT'),     
-       ('ALIGN', (1,0), (1,0), 'RIGHT'),    
-       ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-       ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
     ]))
     story.append(marks_table)
-    story.append(Spacer(1, 0.2*cm)) 
-
+    story.append(Spacer(1, 0.2*cm))
+    
     # Centered "PATTERN & MARKING SCHEME" title
-    centered_title_style = ParagraphStyle(name='CenteredTitle', parent=styles['Normal'], fontName=f"{base_font}-Bold", fontSize=11, alignment=TA_CENTER)
-    story.append(Paragraph("<b>PATTERN & MARKING SCHEME</b>", centered_title_style))
+    story.append(Paragraph("<b>PATTERN & MARKING SCHEME</b>", bold_style_center))
     story.append(Spacer(1, 0.3*cm))
 
+    # Pattern table
     pattern_data = [
-        [Paragraph('Section', bold_style), *[Paragraph(f"({i+1}) {s.strip()}", bold_style) for i, s in enumerate(sections)]],
+        [Paragraph('Section', bold_style_left), *[Paragraph(f"({i+1}) {s.strip()}", bold_style_left) for i, s in enumerate(sections)]],
         [Paragraph('No. Of Questions', normal_style), *[Paragraph(str(q), normal_style) for q in no_of_questions]],
         [Paragraph('Marks Per Ques.', normal_style), *[Paragraph(str(m), normal_style) for m in marks_per_question]]
     ]
-    col_widths = [4.5*cm] + [5*cm] * len(sections)
+    col_widths = [4.5*cm] + [5*cm]*len(sections)
     pattern_table = Table(pattern_data, colWidths=col_widths)
     pattern_table.setStyle(TableStyle([
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
@@ -187,7 +193,8 @@ def create_header_section(total_marks, time_duration, sections, no_of_questions,
     story.append(pattern_table)
     story.append(Spacer(1, 0.5*cm))
 
-    story.append(Paragraph("<b>INSTRUCTIONS</b>", centered_title_style))
+    # Instructions
+    story.append(Paragraph("<b>INSTRUCTIONS</b>", bold_style_center))
     story.append(Spacer(1, 0.3*cm))
     instruction_style = ParagraphStyle(name='InstructionStyle', alignment=TA_LEFT, fontSize=10, fontName=base_font, leftIndent=10)
     for instruction in instructions:
@@ -207,9 +214,9 @@ def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration,
     base_font = "DejaVuSans" if "DejaVuSans" in pdfmetrics.getRegisteredFontNames() else styles['Normal'].fontName
     
     # Styles for paragraphs within the story
-    styles.add(ParagraphStyle(name='QuestionText', alignment=TA_LEFT, fontSize=11, fontName=base_font, leading=14))
-    styles.add(ParagraphStyle(name='OptionText', alignment=TA_LEFT, fontSize=10, fontName=base_font, leading=12))
-    styles.add(ParagraphStyle(name='SectionHeading', alignment=TA_CENTER, fontSize=12, fontName=f"{base_font}-Bold", textColor=colors.white, backColor=colors.HexColor("#001F4D"), borderPadding=5))
+    styles.add(ParagraphStyle(name='QuestionText', alignment=TA_LEFT, fontSize=10, fontName=base_font, leading=14))
+    styles.add(ParagraphStyle(name='OptionText', alignment=TA_LEFT, fontSize=9, fontName=base_font, leading=12))
+    styles.add(ParagraphStyle(name='SectionHeading', alignment=TA_CENTER, fontSize=11, fontName=f"{base_font}-Bold", textColor=colors.white, backColor=colors.HexColor("#001F4D"), borderPadding=5))
 
     first_page_story = create_header_section(total_marks, time_duration, sections, no_of_questions, marks_per_question, instructions)
     story.extend(first_page_story)
@@ -275,7 +282,7 @@ def generate_pdf_for_set(df_set, set_name, sections, total_marks, time_duration,
         ]))
 
         question_block.append(options_table)
-        question_block.append(Spacer(1, 0.3*cm))
+        question_block.append(Spacer(1, 0.1*cm))
         story.append(KeepTogether(question_block))
 
         col_idx += 5
